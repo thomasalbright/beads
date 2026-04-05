@@ -63,6 +63,7 @@ func runPour(cmd *cobra.Command, args []string) {
 	assignee, _ := cmd.Flags().GetString("assignee")
 	attachFlags, _ := cmd.Flags().GetStringSlice("attach")
 	attachType, _ := cmd.Flags().GetString("attach-type")
+	parentFlag, _ := cmd.Flags().GetString("parent")
 
 	// Parse variables
 	vars := make(map[string]string)
@@ -191,10 +192,28 @@ func runPour(cmd *cobra.Command, args []string) {
 		)
 	}
 
+	// Resolve --parent flag to a parent issue ID
+	var flattenParentID string
+	if parentFlag != "" {
+		resolvedParentID, err := utils.ResolvePartialID(ctx, store, parentFlag)
+		if err != nil {
+			FatalError("resolving parent issue %s: %v", parentFlag, err)
+		}
+		flattenParentID = resolvedParentID
+	}
+
 	if dryRun {
-		fmt.Printf("\nDry run: would pour %d issues from proto %s\n\n", len(subgraph.Issues), protoID)
+		stepCount := len(subgraph.Issues) - 1 // exclude root
+		if flattenParentID != "" {
+			fmt.Printf("\nDry run: would pour %d steps from proto %s directly under %s (no root epic)\n\n", stepCount, protoID, flattenParentID)
+		} else {
+			fmt.Printf("\nDry run: would pour %d issues from proto %s\n\n", len(subgraph.Issues), protoID)
+		}
 		fmt.Printf("Storage: permanent (.beads/)\n\n")
 		for _, issue := range subgraph.Issues {
+			if flattenParentID != "" && issue.ID == subgraph.Root.ID {
+				continue // root is not created when flattening
+			}
 			newTitle := substituteVariables(issue.Title, vars)
 			suffix := ""
 			if issue.ID == subgraph.Root.ID && assignee != "" {
@@ -213,14 +232,21 @@ func runPour(cmd *cobra.Command, args []string) {
 
 	// Spawn as persistent mol (ephemeral=false)
 	// Use mol prefix for distinct visual recognition (see types.IDPrefixMol)
-	result, err := spawnMolecule(ctx, store, subgraph, vars, assignee, actor, false, types.IDPrefixMol)
+	result, err := spawnMoleculeWithOptions(ctx, store, subgraph, CloneOptions{
+		Vars:              vars,
+		Assignee:          assignee,
+		Actor:             actor,
+		Ephemeral:         false,
+		Prefix:            types.IDPrefixMol,
+		FlattenToParentID: flattenParentID,
+	})
 	if err != nil {
 		FatalError("pouring proto: %v", err)
 	}
 
-	// Attach bonded protos
+	// Attach bonded protos (only applicable when a root epic was created)
 	totalAttached := 0
-	if len(attachments) > 0 {
+	if len(attachments) > 0 && flattenParentID == "" {
 		spawnedMol, err := store.GetIssue(ctx, result.NewEpicID)
 		if err != nil {
 			FatalError("loading spawned mol: %v", err)
@@ -247,7 +273,11 @@ func runPour(cmd *cobra.Command, args []string) {
 	}
 
 	fmt.Printf("%s Poured mol: created %d issues\n", ui.RenderPass("✓"), result.Created)
-	fmt.Printf("  Root issue: %s\n", result.NewEpicID)
+	if flattenParentID != "" {
+		fmt.Printf("  Parent issue: %s\n", flattenParentID)
+	} else {
+		fmt.Printf("  Root issue: %s\n", result.NewEpicID)
+	}
 	fmt.Printf("  Phase: liquid (persistent in .beads/)\n")
 	if totalAttached > 0 {
 		fmt.Printf("  Attached: %d issues from %d protos\n", totalAttached, len(attachments))
@@ -261,6 +291,7 @@ func init() {
 	pourCmd.Flags().String("assignee", "", "Assign the root issue to this agent/user")
 	pourCmd.Flags().StringSlice("attach", []string{}, "Proto to attach after spawning (repeatable)")
 	pourCmd.Flags().String("attach-type", types.BondTypeSequential, "Bond type for attachments: sequential, parallel, or conditional")
+	pourCmd.Flags().String("parent", "", "Attach formula steps directly to this parent issue (skip root epic)")
 
 	molCmd.AddCommand(pourCmd)
 }

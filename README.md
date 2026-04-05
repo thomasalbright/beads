@@ -1,3 +1,31 @@
+# bd - Beads (Thomas Albright's Fork)
+
+This fork adds `--parent` to `bd mol pour` and `bd mol wisp`, allowing formula
+steps to be created as direct children of an existing parent issue instead of
+always wrapping them in a new root epic.
+
+```bash
+bd mol pour my-formula --parent feat-1234
+bd mol wisp my-formula --parent feat-1234 --var foo=bar
+```
+
+## Building from Source (macOS/Apple Silicon)
+
+Requires ICU (`icu4c`) headers, installed via Homebrew:
+
+```bash
+brew install go icu4c
+
+CGO_CFLAGS="-I/opt/homebrew/opt/icu4c@78/include" \
+CGO_CXXFLAGS="-I/opt/homebrew/opt/icu4c@78/include" \
+CGO_LDFLAGS="-L/opt/homebrew/opt/icu4c@78/lib" \
+go install ./cmd/bd/
+```
+
+The binary lands in `~/go/bin/bd`. Make sure `~/go/bin` is on your `$PATH`.
+
+---
+
 # bd - Beads
 
 **Distributed graph issue tracker for AI agents, powered by [Dolt](https://github.com/dolthub/dolt).**

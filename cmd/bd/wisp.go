@@ -12,6 +12,7 @@ import (
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
+	"github.com/steveyegge/beads/internal/utils"
 )
 
 // Wisp commands - manage ephemeral molecules
@@ -147,6 +148,7 @@ func runWispCreate(cmd *cobra.Command, args []string) {
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	rootOnly, _ := cmd.Flags().GetBool("root-only")
 	varFlags, _ := cmd.Flags().GetStringArray("var")
+	parentFlag, _ := cmd.Flags().GetString("parent")
 
 	// Parse variables
 	vars := make(map[string]string)
@@ -243,15 +245,29 @@ func runWispCreate(cmd *cobra.Command, args []string) {
 		)
 	}
 
+	// Resolve --parent flag to a parent issue ID
+	var flattenParentID string
+	if parentFlag != "" {
+		resolvedParentID, err := utils.ResolvePartialID(ctx, store, parentFlag)
+		if err != nil {
+			FatalError("resolving parent issue %s: %v", parentFlag, err)
+		}
+		flattenParentID = resolvedParentID
+	}
+
 	// Wisps are vapor (ephemeral) by default — only create the root issue.
 	// Materializing child step issues is the "pour" path (bd pour), not wisps.
 	// Formulas that explicitly set pour=true get children even as wisps.
-	if !rootOnly && subgraph != nil && !subgraph.Pour {
+	// When --parent is set, we always materialize all steps (flatten mode).
+	if !rootOnly && subgraph != nil && !subgraph.Pour && flattenParentID == "" {
 		rootOnly = true
 	}
 
 	if dryRun {
-		if rootOnly {
+		if flattenParentID != "" {
+			stepCount := len(subgraph.Issues) - 1
+			fmt.Printf("\nDry run: would create wisp with %d steps from proto %s directly under %s (no root epic)\n", stepCount, protoID, flattenParentID)
+		} else if rootOnly {
 			skipped := len(subgraph.Issues) - 1
 			fmt.Printf("\nDry run: would create wisp with 1 issue (root only) from proto %s\n", protoID)
 			if skipped > 0 {
@@ -266,6 +282,9 @@ func runWispCreate(cmd *cobra.Command, args []string) {
 			issuesToShow = issuesToShow[:1]
 		}
 		for _, issue := range issuesToShow {
+			if flattenParentID != "" && issue.ID == subgraph.Root.ID {
+				continue // root is not created when flattening
+			}
 			newTitle := substituteVariables(issue.Title, vars)
 			fmt.Printf("  - %s (from %s)\n", newTitle, issue.ID)
 		}
@@ -275,11 +294,12 @@ func runWispCreate(cmd *cobra.Command, args []string) {
 	// Spawn as ephemeral in main database (Ephemeral=true, not synced via git)
 	// Use wisp prefix for distinct visual recognition (see types.IDPrefixWisp)
 	result, err := spawnMoleculeWithOptions(ctx, store, subgraph, CloneOptions{
-		Vars:      vars,
-		Actor:     actor,
-		Ephemeral: true,
-		Prefix:    types.IDPrefixWisp,
-		RootOnly:  rootOnly,
+		Vars:              vars,
+		Actor:             actor,
+		Ephemeral:         true,
+		Prefix:            types.IDPrefixWisp,
+		RootOnly:          rootOnly,
+		FlattenToParentID: flattenParentID,
 	})
 	if err != nil {
 		FatalError("creating wisp: %v", err)
@@ -297,12 +317,18 @@ func runWispCreate(cmd *cobra.Command, args []string) {
 	}
 
 	fmt.Printf("%s Created wisp: %d issues\n", ui.RenderPass("✓"), result.Created)
-	fmt.Printf("  Root issue: %s\n", result.NewEpicID)
+	if flattenParentID != "" {
+		fmt.Printf("  Parent issue: %s\n", flattenParentID)
+	} else {
+		fmt.Printf("  Root issue: %s\n", result.NewEpicID)
+	}
 	fmt.Printf("  Phase: vapor (ephemeral, not synced via git)\n")
-	fmt.Printf("\nNext steps:\n")
-	fmt.Printf("  bd close %s.<step>       # Complete steps\n", result.NewEpicID)
-	fmt.Printf("  bd mol squash %s         # Condense to digest (promotes to persistent)\n", result.NewEpicID)
-	fmt.Printf("  bd mol burn %s           # Discard without creating digest\n", result.NewEpicID)
+	if flattenParentID == "" {
+		fmt.Printf("\nNext steps:\n")
+		fmt.Printf("  bd close %s.<step>       # Complete steps\n", result.NewEpicID)
+		fmt.Printf("  bd mol squash %s         # Condense to digest (promotes to persistent)\n", result.NewEpicID)
+		fmt.Printf("  bd mol burn %s           # Discard without creating digest\n", result.NewEpicID)
+	}
 }
 
 // isProtoIssue checks if an issue is a proto (has the template label)
@@ -809,11 +835,13 @@ func init() {
 	wispCmd.Flags().StringArray("var", []string{}, "Variable substitution (key=value)")
 	wispCmd.Flags().Bool("dry-run", false, "Preview what would be created")
 	wispCmd.Flags().Bool("root-only", false, "Create only the root issue (no child step issues)")
+	wispCmd.Flags().String("parent", "", "Attach formula steps directly to this parent issue (skip root epic)")
 
 	// Wisp create command flags (kept for backwards compat: bd mol wisp create <proto>)
 	wispCreateCmd.Flags().StringArray("var", []string{}, "Variable substitution (key=value)")
 	wispCreateCmd.Flags().Bool("dry-run", false, "Preview what would be created")
 	wispCreateCmd.Flags().Bool("root-only", false, "Create only the root issue (no child step issues)")
+	wispCreateCmd.Flags().String("parent", "", "Attach formula steps directly to this parent issue (skip root epic)")
 
 	wispListCmd.Flags().Bool("all", false, "Include closed wisps")
 	wispListCmd.Flags().String("type", "", "Filter by issue type (e.g., agent, task, patrol)")

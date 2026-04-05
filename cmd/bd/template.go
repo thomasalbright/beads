@@ -57,6 +57,12 @@ type CloneOptions struct {
 	// RootOnly: if true, only create the root issue (no child step issues).
 	// Used by patrol wisps where steps are inlined at prime time, not tracked as beads.
 	RootOnly bool
+
+	// FlattenToParentID: if set, skip creating the root epic and attach all
+	// top-level formula steps directly to this existing parent issue instead.
+	// The dependency remapping works by pre-mapping the template root ID to this
+	// parent, so all parent_child deps that pointed at the root now point here.
+	FlattenToParentID string
 }
 
 // bondedIDPattern validates bonded IDs (alphanumeric, dash, underscore, dot)
@@ -488,10 +494,20 @@ func cloneSubgraph(ctx context.Context, s storage.DoltStorage, subgraph *Templat
 	// Generate new IDs and create mapping
 	idMapping := make(map[string]string)
 
+	// When flattening, pre-map the template root to the target parent so that
+	// all dependencies referencing the root are redirected to the parent.
+	if opts.FlattenToParentID != "" {
+		idMapping[subgraph.Root.ID] = opts.FlattenToParentID
+	}
+
 	// Use transaction for atomicity
 	err := transact(ctx, s, "bd: clone template subgraph", func(tx storage.Transaction) error {
 		// First pass: create all issues with new IDs
 		for _, oldIssue := range subgraph.Issues {
+			// When flattening, skip the root — steps attach directly to the parent.
+			if opts.FlattenToParentID != "" && oldIssue.ID == subgraph.Root.ID {
+				continue
+			}
 			// RootOnly: skip child issues, only create the root
 			if opts.RootOnly && oldIssue.ID != subgraph.Root.ID {
 				continue
@@ -578,10 +594,15 @@ func cloneSubgraph(ctx context.Context, s storage.DoltStorage, subgraph *Templat
 		return nil, err
 	}
 
+	created := len(idMapping)
+	if opts.FlattenToParentID != "" {
+		created-- // root was pre-mapped but not actually created
+	}
+
 	return &InstantiateResult{
 		NewEpicID: idMapping[subgraph.Root.ID],
 		IDMapping: idMapping,
-		Created:   len(idMapping),
+		Created:   created,
 	}, nil
 }
 
