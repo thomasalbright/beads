@@ -350,6 +350,9 @@ var listCmd = &cobra.Command{
 			wispType = &wt
 		}
 
+		// Include wisps in tree hierarchy (--wisps flag)
+		includeWisps, _ := cmd.Flags().GetBool("wisps")
+
 		// Time-based scheduling filters (GH#820)
 		deferredFlag, _ := cmd.Flags().GetBool("deferred")
 		deferAfter, _ := cmd.Flags().GetString("defer-after")
@@ -375,8 +378,8 @@ var listCmd = &cobra.Command{
 		// Ready filter (bd-ihu31)
 		readyFlag, _ := cmd.Flags().GetBool("ready")
 
-		// Watch mode implies pretty format
-		if watchMode {
+		// Watch mode and --wisps imply pretty format
+		if watchMode || includeWisps {
 			prettyFormat = true
 		}
 
@@ -792,6 +795,29 @@ var listCmd = &cobra.Command{
 			FatalError("%v", err)
 		}
 
+		// Merge wisps into issue list for tree display (--wisps flag).
+		// Only done for tree/pretty format — flat/JSON output is unaffected.
+		// Deduplicates by ID in case the backend already returned wisps in the
+		// primary search (e.g. embedded store returns all when Ephemeral=nil).
+		if includeWisps && prettyFormat {
+			seen := make(map[string]bool, len(issues))
+			for _, iss := range issues {
+				seen[iss.ID] = true
+			}
+			ephemeralTrue := true
+			wispFilter := filter
+			wispFilter.Ephemeral = &ephemeralTrue
+			wispFilter.IsTemplate = nil // wisps are never templates
+			wispIssues, wispErr := activeStore.SearchIssues(ctx, "", wispFilter)
+			if wispErr == nil {
+				for _, iss := range wispIssues {
+					if !seen[iss.ID] {
+						issues = append(issues, iss)
+					}
+				}
+			}
+		}
+
 		// Apply sorting
 		sortIssues(issues, sortBy, reverse)
 
@@ -1021,6 +1047,9 @@ func init() {
 
 	// Wisp type filtering (TTL-based compaction classification)
 	listCmd.Flags().String("wisp-type", "", "Filter by wisp type: heartbeat, ping, patrol, gc_report, recovery, error, escalation")
+
+	// Include wisps in tree hierarchy
+	listCmd.Flags().Bool("wisps", false, "Include ephemeral wisps in the tree hierarchy (implies --pretty)")
 
 	// Time-based scheduling filters (GH#820)
 	listCmd.Flags().Bool("deferred", false, "Show only issues with defer_until set")

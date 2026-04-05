@@ -56,19 +56,26 @@ func formatPrettyIssue(issue *types.Issue) string {
 		typeBadge = ui.TypeBugStyle.Render("[bug]") + " "
 	}
 
+	// Wisp marker: ephemeral issues get a muted ~ prefix
+	wispMarker := ""
+	if issue.Ephemeral {
+		wispMarker = ui.RenderMuted("~") + " "
+	}
+
 	// Format: STATUS_ICON ID PRIORITY [Type] Title
 	// Priority uses ● icon with color, no brackets needed
 	// Closed issues: entire line is muted
 	if issue.Status == types.StatusClosed {
-		return fmt.Sprintf("%s %s %s %s%s",
+		return fmt.Sprintf("%s %s%s %s %s%s",
 			statusIcon,
+			wispMarker,
 			ui.RenderMuted(issue.ID),
 			ui.RenderMuted(fmt.Sprintf("● P%d", issue.Priority)),
 			ui.RenderMuted(string(issue.IssueType)),
 			ui.RenderMuted(" "+issue.Title))
 	}
 
-	return fmt.Sprintf("%s %s %s %s%s", statusIcon, issue.ID, priorityTag, typeBadge, issue.Title)
+	return fmt.Sprintf("%s %s%s %s %s%s", statusIcon, wispMarker, issue.ID, priorityTag, typeBadge, issue.Title)
 }
 
 // formatPrettyIssueWithContext formats an issue with optional parent epic annotation

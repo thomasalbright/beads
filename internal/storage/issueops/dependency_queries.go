@@ -9,27 +9,37 @@ import (
 	"github.com/steveyegge/beads/internal/types"
 )
 
-// GetAllDependencyRecordsInTx returns all dependency records from the dependencies table.
+// GetAllDependencyRecordsInTx returns all dependency records from both the
+// dependencies and wisp_dependencies tables, so that wisps can be placed
+// correctly in the tree hierarchy alongside persistent issues.
 func GetAllDependencyRecordsInTx(ctx context.Context, tx *sql.Tx) (map[string][]*types.Dependency, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT issue_id, depends_on_id, type, created_at, created_by, metadata, thread_id
-		FROM dependencies
-		ORDER BY issue_id
-	`)
-	if err != nil {
-		return nil, fmt.Errorf("get all dependency records: %w", err)
-	}
-	defer rows.Close()
-
 	result := make(map[string][]*types.Dependency)
-	for rows.Next() {
-		dep, scanErr := scanDependencyRow(rows)
-		if scanErr != nil {
-			return nil, fmt.Errorf("get all dependency records: %w", scanErr)
+	for _, table := range []string{"dependencies", "wisp_dependencies"} {
+		//nolint:gosec // G201: table is a hardcoded constant
+		rows, err := tx.QueryContext(ctx, fmt.Sprintf(`
+			SELECT issue_id, depends_on_id, type, created_at, created_by, metadata, thread_id
+			FROM %s
+			ORDER BY issue_id
+		`, table))
+		if err != nil {
+			return nil, fmt.Errorf("get all dependency records from %s: %w", table, err)
 		}
-		result[dep.IssueID] = append(result[dep.IssueID], dep)
+		for rows.Next() {
+			dep, scanErr := scanDependencyRow(rows)
+			if scanErr != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("get all dependency records: %w", scanErr)
+			}
+			result[dep.IssueID] = append(result[dep.IssueID], dep)
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf("get all dependency records from %s: close: %w", table, err)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("get all dependency records from %s: rows: %w", table, err)
+		}
 	}
-	return result, rows.Err()
+	return result, nil
 }
 
 // GetDependencyRecordsForIssuesInTx returns dependency records for specific issues,
