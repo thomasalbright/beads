@@ -216,6 +216,7 @@ func GetReadyWorkInTx(
 	}
 
 	// When IncludeEphemeral is set, also query the wisps table.
+	// Apply the same blockedIDs exclusion used for the main issues query.
 	if filter.IncludeEphemeral {
 		ephTrue := true
 		wispFilter := types.IssueFilter{Limit: filter.Limit, Ephemeral: &ephTrue}
@@ -225,7 +226,15 @@ func GetReadyWorkInTx(
 		}
 		wisps, wErr := SearchIssuesInTx(ctx, tx, "", wispFilter)
 		if wErr == nil {
-			ordered = append(ordered, wisps...)
+			blockedSet := make(map[string]bool, len(blockedIDs))
+			for _, id := range blockedIDs {
+				blockedSet[id] = true
+			}
+			for _, w := range wisps {
+				if !blockedSet[w.ID] {
+					ordered = append(ordered, w)
+				}
+			}
 		}
 	}
 
